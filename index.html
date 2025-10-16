@@ -3706,56 +3706,98 @@ ${(payload.preview || '').substring(0,120)}...`
 })();
 </script>
 <script>
-/* =============== CONFIG =============== */
+/* ===================== CONFIG ===================== */
 const WHATSAPP_NUMBER = "5491160410607";   // tu número (solo dígitos)
 
-/* =============== HELPERS =============== */
+/* ===================== HELPERS ===================== */
 const reEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const $ = (id) => document.getElementById(id);
-function setInfo(msg){ const el=$("q_info"); if(el) el.textContent = msg; }
+function setInfo(msg){ const el = $("q_info"); if (el) el.textContent = msg; }
 
-/* Convierte la vista previa a JPEG (canvas/svg/img) */
-async function getPreviewJPEG(){
-  // 1) canvas
-  const cvs = document.querySelector("canvas#stage, canvas.preview, canvas");
-  if (cvs && cvs.toDataURL){
-    const c = document.createElement("canvas");
-    c.width = cvs.width; c.height = cvs.height;
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
-    ctx.drawImage(cvs,0,0);
-    return c.toDataURL("image/jpeg", 0.7);
+/* ---------- JPEG adaptativo: <= ~6MB ---------- */
+async function getPreviewJPEG(maxBytes = 6 * 1024 * 1024) {
+  async function rasterBase() {
+    // 1) canvas directo
+    const cvs = document.querySelector("canvas#stage, canvas.preview, canvas");
+    if (cvs && cvs.toDataURL) {
+      const c = document.createElement("canvas");
+      c.width = cvs.width; c.height = cvs.height;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
+      ctx.drawImage(cvs,0,0);
+      return c;
+    }
+    // 2) svg -> raster
+    const svg = document.getElementById("svg") || document.querySelector("svg");
+    if (svg) {
+      const xml = new XMLSerializer().serializeToString(svg);
+      const img = new Image();
+      img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(xml)));
+      await new Promise(r => img.onload = r);
+      const w0 = img.width || (svg.viewBox?.baseVal?.width || 2000);
+      const h0 = img.height || (svg.viewBox?.baseVal?.height || 1500);
+      const c = document.createElement("canvas");
+      c.width = Math.max(800, Math.min(2000, w0));
+      c.height = Math.max(600, Math.min(1500, h0));
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      return c;
+    }
+    // 3) <img id="preview">
+    const im = $("preview");
+    if (im && im.src) {
+      const tmp = new Image(); tmp.src = im.src;
+      await new Promise(r => tmp.onload = r);
+      const c = document.createElement("canvas");
+      c.width = tmp.naturalWidth || 2000;
+      c.height = tmp.naturalHeight || 1500;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
+      ctx.drawImage(tmp,0,0,c.width,c.height);
+      return c;
+    }
+    return null;
   }
-  // 2) svg
-  const svg = document.getElementById("svg") || document.querySelector("svg");
-  if (svg){
-    const xml = new XMLSerializer().serializeToString(svg);
-    const img = new Image();
-    img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(xml)));
-    await new Promise(r=> img.onload = r);
-    const c = document.createElement("canvas");
-    c.width = img.width||1600; c.height = img.height||1200;
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
-    ctx.drawImage(img,0,0,c.width,c.height);
-    return c.toDataURL("image/jpeg", 0.9);
+  const base = await rasterBase();
+  if (!base) return "";
+
+  const MAX_W = 2000, MAX_H = 1500; // tope de dimensiones
+  let w = base.width, h = base.height;
+  const scale1 = Math.min(1, MAX_W / w, MAX_H / h);
+  w = Math.round(w * scale1); h = Math.round(h * scale1);
+
+  const work = document.createElement("canvas");
+  work.width = w; work.height = h;
+  let ctx = work.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.fillStyle = "#fff"; ctx.fillRect(0,0,w,h);
+  ctx.drawImage(base, 0, 0, w, h);
+
+  function approxBytes(dataURL){
+    const i = dataURL.indexOf(","); return Math.ceil((dataURL.length - (i+1)) * 3/4);
   }
-  // 3) <img id="preview">
-  const im = $("preview");
-  if (im && im.src){
-    const img = new Image(); img.src = im.src;
-    await new Promise(r=> img.onload = r);
-    const c = document.createElement("canvas");
-    c.width = img.naturalWidth||1600; c.height = img.naturalHeight||1200;
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
-    ctx.drawImage(img,0,0,c.width,c.height);
-    return c.toDataURL("image/jpeg", 0.9);
+
+  let quality = 0.8;
+  for (let i = 0; i < 8; i++){
+    let data = work.toDataURL("image/jpeg", quality);
+    if (approxBytes(data) <= maxBytes) return data;
+    if (quality > 0.5) {
+      quality = Math.max(0.5, quality - 0.1);
+    } else {
+      w = Math.round(w * 0.85); h = Math.round(h * 0.85);
+      if (w < 800 || h < 600) return data; // ya es chico; devolvemos lo mejor logrado
+      work.width = w; work.height = h;
+      ctx = work.getContext("2d");
+      ctx.imageSmoothingQuality = "high";
+      ctx.fillStyle = "#fff"; ctx.fillRect(0,0,w,h);
+      ctx.drawImage(base, 0, 0, w, h);
+    }
   }
-  return "";
+  return work.toDataURL("image/jpeg", 0.5);
 }
 
-/* Copia imagen al portapapeles (si el navegador deja) */
+/* ---------- copiar imagen a portapapeles (si se puede) ---------- */
 async function tryCopyToClipboard(jpegDataUrl){
   try{
     if (!jpegDataUrl) return false;
@@ -3770,35 +3812,39 @@ async function tryCopyToClipboard(jpegDataUrl){
   return false;
 }
 
-/* Email: POST al Apps Script con fallbacks */
+/* ===================== EMAIL (webhook) ===================== */
 async function postWebhook(payload){
   const url = (window.CONTACT && window.CONTACT.webhook_url) || "";
   if(!url) return {ok:false, reason:"no-webhook"};
-  // 1) JSON
+
+  // 1) JSON normal
   try{
     const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(r.ok) return {ok:true, via:"json"};
+    if (r.ok) return {ok:true, via:"json"};
   }catch(e){}
-  // 2) text/plain no-cors
+
+  // 2) text/plain (no-cors)
   try{
     await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload),mode:"no-cors"});
     return {ok:true, via:"text/plain-no-cors"};
   }catch(e){}
-  // 3) FORM POST
+
+  // 3) FORM POST (bypass CSP)
   try{
     let ifr = $("send_target_iframe");
-    if(!ifr){ ifr=document.createElement("iframe"); ifr.name=ifr.id="send_target_iframe"; ifr.style.display="none"; document.body.appendChild(ifr); }
+    if(!ifr){ ifr = document.createElement("iframe"); ifr.name=ifr.id="send_target_iframe"; ifr.style.display="none"; document.body.appendChild(ifr); }
     const form = document.createElement("form");
-    form.action = url; form.method="POST"; form.enctype="text/plain"; form.target="send_target_iframe";
-    const t = document.createElement("textarea"); t.name="raw"; t.value=JSON.stringify(payload);
+    form.action = url; form.method = "POST"; form.enctype = "text/plain"; form.target = "send_target_iframe";
+    const t = document.createElement("textarea"); t.name = "raw"; t.value = JSON.stringify(payload);
     form.appendChild(t); document.body.appendChild(form); form.submit();
     setTimeout(()=>{ try{ form.remove(); }catch{} }, 800);
     return {ok:true, via:"form-post"};
   }catch(e){}
+
   return {ok:false, reason:"all-failed"};
 }
 
-/* Copia por mail cuando el canal es WhatsApp */
+/* ---------- Copia por mail cuando el canal es WhatsApp ---------- */
 function sendLeadCopyEmail(payload){
   const copy = {
     meta: { channel: "whatsapp", ts: new Date().toISOString() },
@@ -3806,13 +3852,12 @@ function sendLeadCopyEmail(payload){
     design: payload?.design || {},
     image: payload?.image || ""
   };
-  // no esperamos la respuesta para no frenar la UI
-  postWebhook(copy);
+  postWebhook(copy); // no esperamos respuesta
 }
 
-/* Abre tu WhatsApp con texto y prepara imagen */
+/* ===================== WHATSAPP ===================== */
 async function openWhatsAppDirect(payload){
-  // forzar JPEG y copiar si se puede
+  // forzar JPEG adaptativo y copiar si se puede
   payload.image = await getPreviewJPEG();
   await tryCopyToClipboard(payload.image);
 
@@ -3822,12 +3867,12 @@ async function openWhatsAppDirect(payload){
   const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${texto}`;
   window.open(url, "_blank");
 
-  // enviar copia por mail
+  // copia por mail para registrar lead
   sendLeadCopyEmail(payload);
   setInfo("WhatsApp abierto. Envié copia por mail ✅");
 }
 
-/* =============== BIND BOTÓN ENVIAR =============== */
+/* ===================== BIND BOTÓN ENVIAR ===================== */
 (function wireSend(){
   const btn = $("q_send");
   if(!btn) return;
@@ -3846,23 +3891,24 @@ async function openWhatsAppDirect(payload){
     if(!name){ setInfo("Completá tu nombre / empresa."); ($("q_name")||$("c_name"))?.focus(); return; }
     if(!contact){ setInfo("Completá Email o WhatsApp."); ($("q_contact")||$("c_contact"))?.focus(); return; }
 
-    // construir payload desde tu función si existe
+    // Armar payload desde tu función si existe
     let payload = (typeof buildPayload==="function") ? await buildPayload() : {contact:{}, design:{}, image:""};
     payload.contact = Object.assign({}, payload.contact, { name, contact, msg });
 
     if (reEmail.test(contact)){
-      // EMAIL
+      // EMAIL → webhook (también con JPEG adaptativo)
       setInfo("Enviando…");
-      payload.image = await getPreviewJPEG(); // aseguramos JPEG también por email
+      payload.image = await getPreviewJPEG();
       const r = await postWebhook(payload);
       setInfo(r.ok ? "Enviado ✅" : "No se pudo confirmar el envío");
     } else {
-      // WHATSAPP
+      // WHATSAPP → tu chat + copia por mail
       await openWhatsAppDirect(payload);
     }
   });
 })();
 </script>
+
 
 </body>
 </html>
