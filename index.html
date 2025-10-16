@@ -3825,7 +3825,7 @@ async function sendWhatsApp(payload){
   }catch(e){}
 
   // 3) Abrir WhatsApp con el texto
-  const num = (window.CONTACT && CONTACT.whatsapp_number) || "";
+  const num = (window.CONTACT && CONTACT.whatsapp_number=5491160410607) || "";
   const waUrl = num ? `https://wa.me/${num}?text=${texto}` : `https://wa.me/?text=${texto}`;
   window.open(waUrl, "_blank");
 }
