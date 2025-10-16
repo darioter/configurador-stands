@@ -3822,6 +3822,25 @@ async function postWebhook(payload){
     return {ok:true,via:"form-post"};
   }catch(e){}
   return {ok:false};
+  <script>
+async function sendLeadCopyEmail(payload){
+  // etiqueta el canal para el asunto del correo
+  const copy = {
+    meta: { channel: "whatsapp", ts: new Date().toISOString() },
+    contact: {
+      name: payload?.contact?.name || "",
+      contact: payload?.contact?.contact || "", // acá va el teléfono escrito
+      msg: payload?.contact?.msg || ""
+    },
+    design: payload?.design || {},
+    image: payload?.image || ""  // JPEG ya generado
+  };
+  try {
+    // no bloquea la UI; si falla, seguimos igual
+    postWebhook(copy);
+  } catch(e) {}
+}
+</script>
 }
 
 /* Listener del botón: valida, fuerza JPEG y decide canal */
