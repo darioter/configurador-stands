@@ -3800,6 +3800,12 @@ async function openWhatsAppDirect(payload, phoneInput){
 const target = "5491160410607"; // <-- tu número en formato internacional, solo dígitos
 const url = `https://wa.me/${target}?text=${texto}`;
 window.open(url, "_blank");
+// … dentro del else {  // cuando es teléfono
+payload.image = await getPreviewJPEG();          // asegura JPEG
+await openWhatsAppWithImage(payload);            // abre tu chat
+sendLeadCopyEmail(payload);                      // <-- copia por mail a dario@
+setInfo("WhatsApp abierto. Envié copia por mail ✅");
+
 }
 
 /* Webhook Email con fallbacks (igual, sin cambios visuales) */
