@@ -303,7 +303,7 @@ body{ font-size: var(--fs); font-family: system-ui, Segoe UI, Roboto, Arial, san
 <script>
 // === Envío: configuración ===
 window.CONTACT = {
-  webhook_url: "https://script.google.com/macros/s/AKfycbwe_i9q7-ZveHV0w997BSKO1gY-dy5bcFErQ0r95FVwbPlu-Xq9TgcpuquupqVH1-E8kA/exec",
+  webhook_url: "https://script.google.com/macros/s/AKfycbzzDrSB67aT2vKjOU0_o28-hkNFDieC7hBVtr-6xk30ckgacpEbW659DCBQsXIYsJUCfQ/exec",
   emailjs: { service_id: "", template_id: "", public_key: "" }, // opcional
   to_email: "dario@dali-arquitectura.com.ar"
 };
@@ -3704,88 +3704,39 @@ ${(payload.preview || '').substring(0,120)}...`
     });
   }
 })();
+</script>
+
+
 <script>
-/* === Helpers mínimos === */
-const reEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-function onlyDigits(s){ return String(s||"").replace(/\D+/g,""); }
-function isPhone(s){
-  const d = onlyDigits(s);
-  return d.length >= 8 && d.length <= 15;  // ej: 5491160410607
-}
-function setInfo(msg){
-  const el = document.getElementById('q_info');
-  if (el) el.textContent = msg;
-}
-function getVal(...ids){
-  for (const id of ids){
-    const el = document.getElementById(id);
-    if (el && el.value != null) return el.value.trim();
-  }
-  return "";
-}
-
-/* === WhatsApp (solo si hay teléfono válido) === */
-function dataURLToBlob(dataURL){
-  const [meta, b64] = dataURL.split(',');
-  const mime = (meta.split(':')[1]||'image/png').split(';')[0];
-  const bin = atob(b64); const u8 = new Uint8Array(bin.length);
-  for (let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
-  return new Blob([u8], {type: mime});
-}
-function fileFromDataURL(dataURL){
-  const isJpg = dataURL.startsWith('data:image/jpeg');
-  const isPng = dataURL.startsWith('data:image/png');
-  const ext = isJpg ? 'jpg' : (isPng ? 'png' : 'png');
-  const mime = isJpg ? 'image/jpeg' : 'image/png';
-  return new File([dataURLToBlob(dataURL)], `boceto_dali.${ext}`, {type: mime});
-}
-async function sendWhatsApp(payload, phone){
-  setInfo("Abriendo WhatsApp…");
-  const img = payload.image || payload.preview || "";
-  const name = payload.contact?.name || "";
-  const msg  = payload.contact?.msg  || "";
-  const texto = encodeURIComponent(`Quiero cotizar este diseño.\n\nNombre/Empresa: ${name}\n${msg||""}`);
-
-  // 1) intentar compartir imagen
-  try{
-    if(img && navigator.canShare){
-      const file = fileFromDataURL(img);
-      if(navigator.canShare({files:[file]})){
-        await navigator.share({ files:[file], text: "Quiero cotizar este diseño", title: "Boceto Dalí" });
-        setInfo("Compartido ✅");
-      }
-    }
-  }catch(e){ /* seguimos */ }
-
-  // 2) abrir wa.me con número
-  const num = onlyDigits(phone);
-  const url = `https://wa.me/${num}?text=${texto}`;
-  window.open(url, "_blank");
-}
-
-/* === Email (webhook) === */
+// ========= Utilidades de envío =========
 async function postWebhook(payload){
   const url = (window.CONTACT && CONTACT.webhook_url) || "";
-  if(!url) return {ok:false};
+  if(!url) return {ok:false, reason:"no-webhook"};
+
+  // 1) JSON normal (si la CSP lo permite)
   try{
-    const r = await fetch(url, {
+    const r1 = await fetch(url, {
       method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify(payload),
       credentials: "omit"
     });
-    if (r.ok) return {ok:true, via:"json"};
-  }catch(e){}
+    if (r1.ok) { let data={}; try{ data = await r1.json(); }catch{}; return {ok:true, via:"json", data}; }
+  }catch(e){ console.warn("webhook json failed", e); }
+
+  // 2) text/plain + no-cors (evita preflight pero puede caer por connect-src)
   try{
     await fetch(url, {
       method: "POST",
       headers: {"Content-Type":"text/plain;charset=utf-8"},
       body: JSON.stringify(payload),
-      mode: "no-cors",
-      credentials: "omit"
+      credentials: "omit",
+      mode: "no-cors"
     });
     return {ok:true, via:"text/plain-no-cors"};
-  }catch(e){}
+  }catch(e){ console.warn("webhook text/plain failed", e); }
+
+  // 3) FORM POST (bypassa connect-src; depende de form-action)
   try{
     let iframe = document.getElementById('send_target_iframe');
     if(!iframe){
@@ -3796,74 +3747,154 @@ async function postWebhook(payload){
       document.body.appendChild(iframe);
     }
     const form = document.createElement('form');
-    form.action = url; form.method = 'POST'; form.enctype = 'text/plain'; form.target = 'send_target_iframe';
-    const raw = document.createElement('textarea'); raw.name = 'raw'; raw.value = JSON.stringify(payload);
-    form.appendChild(raw); document.body.appendChild(form); form.submit();
-    setTimeout(()=>{ try{ form.remove(); }catch{} }, 800);
-    return {ok:true, via:"form-post"};
-  }catch(e){}
-  return {ok:false};
+    form.action = url;
+    form.method = 'POST';
+    form.enctype = 'text/plain';
+    form.target = 'send_target_iframe';
+
+    const raw = document.createElement('textarea');
+    raw.name = 'raw';
+    raw.value = JSON.stringify(payload);
+    form.appendChild(raw);
+
+    document.body.appendChild(form);
+    form.submit();
+    setTimeout(()=>{ try{ form.remove(); }catch{} }, 1000);
+    return {ok:true, via:'form-post'};
+  }catch(e){ console.warn("form post failed", e); }
+
+  // 4) Beacon (último recurso)
+  try{
+    const blob = new Blob([JSON.stringify(payload)], {type: "text/plain"});
+    if(navigator.sendBeacon(url, blob)) return {ok:true, via:"beacon"};
+  }catch(e){ console.warn("beacon failed", e); }
+
+  return {ok:false, reason:"all-failed"};
 }
-async function sendEmail(payload){
-  setInfo("Enviando…");
-  const r = await postWebhook(payload);
-  setInfo(r.ok ? "Enviado ✅" : "No se pudo confirmar el envío");
-  return r.ok;
-}
 
-/* === Listener del botón: valida y decide === */
-(function wireSend(){
-  const btn = document.getElementById("q_send");
-  if(!btn) return;
-
-  // Evitar listeners duplicados
-  const clone = btn.cloneNode(true);
-  btn.parentNode.replaceChild(clone, btn);
-
-  clone.addEventListener("click", async (e) => {
-    e.preventDefault();
-
-    // Tomar valores del formulario (mantenemos tus ids habituales)
-    const name = getVal("q_name","c_name");
-    const contact = getVal("q_contact","c_contact");
-    const msg = getVal("q_msg","c_msg");
-
-    if(!name){
-      setInfo("Completá tu nombre / empresa."); 
-      (document.getElementById("q_name")||document.getElementById("c_name"))?.focus();
-      return;
-    }
-    if(!contact){
-      setInfo("Completá Email o WhatsApp.");
-      (document.getElementById("q_contact")||document.getElementById("c_contact"))?.focus();
-      return;
-    }
-
-    const isMail = reEmail.test(contact);
-    const isTel  = isPhone(contact);
-
-    if(!isMail && !isTel){
-      setInfo("Ingresá un email válido o un teléfono con código de país.");
-      (document.getElementById("q_contact")||document.getElementById("c_contact"))?.focus();
-      return;
-    }
-
-    // Construir payload con tu función existente (no tocamos diseño)
-    let payload = (typeof buildPayload === "function") ? await buildPayload() : {contact:{}, design:{}, image:""};
-    // asegurarnos que queden los datos validados
-    payload.contact = Object.assign({}, payload.contact, { name, contact, msg });
-
-    if (isMail){
-      // EMAIL
-      await sendEmail(payload);
-    } else {
-      // WHATSAPP (requiere teléfono)
-      await sendWhatsApp(payload, contact);
-    }
+async function sendViaEmailJS(payload){
+  const cfg = (window.CONTACT && CONTACT.emailjs) || {};
+  if(!cfg || !cfg.service_id || !cfg.template_id || !cfg.public_key) return {ok:false, reason:"no-emailjs"};
+  if(!window.emailjs){
+    await new Promise((resolve, reject)=>{
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js";
+      s.onload = resolve; s.onerror = reject; document.body.appendChild(s);
+    });
+  }
+  window.emailjs.init(cfg.public_key);
+  const to = (window.CONTACT && CONTACT.to_email) || "dario@dali-arquitectura.com.ar";
+  await window.emailjs.send(cfg.service_id, cfg.template_id, {
+    to_email: to,
+    from_name: document.getElementById("c_name")?.value || document.getElementById("q_name")?.value || "Cliente",
+    reply_to: document.getElementById("c_contact")?.value || document.getElementById("q_contact")?.value || "",
+    message: document.getElementById("c_msg")?.value || document.getElementById("q_msg")?.value || "",
+    lot_type: (window.state?.lotType || window.S?.lotType || ""),
+    width_m: (window.state?.widthM || window.S?.gridW || ""),
+    height_m: (window.state?.heightM || window.S?.gridH || ""),
+    tile_m: (window.state?.tileM || ""),
+    cells: `${window.state?.cols || ""}x${window.state?.rows || ""}`,
+    design_json: JSON.stringify(payload.design),
+    image_b64: payload.image || payload.preview || ""
   });
-})();
+  return {ok:true};
+}
+
+function mailtoFallback(payload){
+  const name = document.getElementById('c_name')?.value || document.getElementById('q_name')?.value || "";
+  const contact = document.getElementById('c_contact')?.value || document.getElementById('q_contact')?.value || "";
+  const msg = document.getElementById('c_msg')?.value || document.getElementById('q_msg')?.value || "";
+  const subject = encodeURIComponent(`Solicitud de cotización · Dalí Arquitectura · ${new Date().toLocaleDateString()}`);
+  const body = encodeURIComponent(
+`Nombre/Empresa: ${name}
+Contacto: ${contact}
+
+Mensaje:
+${msg}
+
+Diseño (JSON):
+${JSON.stringify(payload.design)}
+
+Imagen (dataURL — pegar en navegador si el cliente no adjunta):
+${(payload.image || payload.preview || '').substring(0,120)}...`
+  );
+  const to = (window.CONTACT && CONTACT.to_email) || "dario@dali-arquitectura.com.ar";
+  window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+  return {ok:true, via:"mailto"};
+}
+
+async function sendContact(payload){
+  const qInfo = document.getElementById("q_info");
+  if(qInfo) qInfo.textContent = "Enviando…";
+  try{
+    const r = await postWebhook(payload);
+    if(r && r.ok){ if(qInfo) qInfo.textContent = "Enviado ✅"; return r; }
+  }catch(e){ console.warn("webhook error", e); }
+  try{
+    const r2 = await sendViaEmailJS(payload);
+    if(r2 && r2.ok){ if(qInfo) qInfo.textContent = "Enviado con EmailJS ✅"; return r2; }
+  }catch(e){ console.warn("emailjs error", e); }
+  if(qInfo) qInfo.textContent = "Usando mailto…";
+  return mailtoFallback(payload);
+}
 </script>
 
+
+<script>
+function buildPayload(){
+  // Intentar obtener imagen del boceto
+  let img = "";
+  try{
+    if(typeof renderImage === "function"){
+      img = renderImage("jpeg", 0.88); // menor peso
+    }else{
+      const svg = document.getElementById('svg') || document.querySelector('svg');
+      if(svg){
+        const xml = new XMLSerializer().serializeToString(svg);
+        const svg64 = btoa(unescape(encodeURIComponent(xml)));
+        const image64 = "data:image/svg+xml;base64," + svg64;
+        img = image64;
+      } else {
+        img = document.getElementById("preview")?.src || "";
+      }
+    }
+  }catch(e){ console.warn("no preview image", e); }
+
+  const notes = document.getElementById("notes")?.value || "";
+  const name  = document.getElementById("c_name")?.value || document.getElementById("q_name")?.value || "";
+  const contact = document.getElementById("c_contact")?.value || document.getElementById("q_contact")?.value || "";
+  const msg   = document.getElementById("c_msg")?.value || document.getElementById("q_msg")?.value || "";
+
+  const lotType = window.state?.lotType || window.S?.lotType || (document.getElementById("lotType")?.value || "");
+  const widthM  = window.state?.widthM || window.S?.gridW || parseFloat(document.getElementById("widthM")?.value || "0");
+  const heightM = window.state?.heightM || window.S?.gridH || parseFloat(document.getElementById("heightM")?.value || "0");
+  const tileM   = window.state?.tileM || parseFloat(document.getElementById("tileM")?.value || "0.5");
+  const cols    = window.state?.cols || Math.round(widthM / tileM);
+  const rows    = window.state?.rows || Math.round(heightM / tileM);
+  const placed  = window.state?.placed || window.S?.placed || window.S?.cells || [];
+
+  return {
+    meta:{ ts:new Date().toISOString(), app:"Dali Stand Designer (public)", version:"1.0.1" },
+    contact:{ name, contact, msg, notes },
+    design:{ lotType, widthM, heightM, tileM, cols, rows, placed },
+    image: img
+  };
+}
+</script>
+
+
+<script>
+document.getElementById("q_send")?.addEventListener("click", async () => {
+  try{
+    const payload = buildPayload();
+    await sendContact(payload);
+  }catch(err){
+    console.error(err);
+    const qInfo = document.getElementById("q_info");
+    if(qInfo) qInfo.textContent = "Error en el envío.";
+  }
+});
+</script>
 
 </body>
 </html>
