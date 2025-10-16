@@ -3708,7 +3708,7 @@ ${(payload.preview || '').substring(0,120)}...`
 
 <script>
 /* ========= CONFIG ========= */
-const WHATSAPP_NUMBER = "5491160410607";  // <-- REEMPLAZA por tu número (solo dígitos)
+const WHATSAPP_NUMBER = "5491160410607";  // tu número (solo dígitos)
 
 /* ========= UTILIDADES ========= */
 const reEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -3716,12 +3716,11 @@ const $ = id => document.getElementById(id);
 const digits = s => String(s||"").replace(/\D+/g,"");
 function setInfo(m){ const el=$('q_info'); if(el) el.textContent=m; }
 
-/* Convertir cualquier preview (canvas/svg/img) a JPEG dataURL */
+/* Convertir la preview a JPEG (canvas/svg/img) */
 async function getPreviewJPEG(){
-  // 1) canvas directo (si existe)
+  // 1) canvas (preferido)
   const cvs = document.querySelector("canvas#stage, canvas.preview, canvas");
   if (cvs && cvs.toDataURL) {
-    // fondo blanco para evitar png transparente en JPEG
     const c = document.createElement("canvas");
     c.width = cvs.width; c.height = cvs.height;
     const ctx = c.getContext("2d");
@@ -3729,51 +3728,37 @@ async function getPreviewJPEG(){
     ctx.drawImage(cvs,0,0);
     return c.toDataURL("image/jpeg", 0.9);
   }
-
-  // 2) si hay SVG, rasterizarlo a JPEG
+  // 2) svg
   const svg = document.getElementById("svg") || document.querySelector("svg");
   if (svg) {
     const xml = new XMLSerializer().serializeToString(svg);
-    const svg64 = btoa(unescape(encodeURIComponent(xml)));
     const img = new Image();
-    const url = "data:image/svg+xml;base64," + svg64;
-    await new Promise(res => { img.onload = res; img.src = url; });
+    img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(xml)));
+    await new Promise(res => { img.onload = res; });
     const c = document.createElement("canvas");
-    c.width = img.width || 1600;
-    c.height = img.height || 1200;
+    c.width = img.width || 1600; c.height = img.height || 1200;
     const ctx = c.getContext("2d");
     ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,c.width,c.height);
-    ctx.drawImage(img, 0, 0, c.width, c.height);
+    ctx.drawImage(img,0,0,c.width,c.height);
     return c.toDataURL("image/jpeg", 0.9);
   }
-
-  // 3) fallback: <img id="preview"> → si es svg convertir; si no, usar tal cual
+  // 3) <img id="preview">
   const im = $("preview");
   if (im && im.src) {
-    if (im.src.startsWith("data:image/svg")) {
-      const img = new Image(); await new Promise(r=>{ img.onload=r; img.src=im.src; });
-      const c = document.createElement("canvas");
-      c.width = img.width || 1600; c.height = img.height || 1200;
-      const ctx = c.getContext("2d");
-      ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,c.width,c.height);
-      ctx.drawImage(img,0,0,c.width,c.height);
-      return c.toDataURL("image/jpeg", 0.9);
-    }
-    // si ya es raster, re-rasterizar a JPEG
-    const img2 = new Image(); await new Promise(r=>{ img2.onload=r; img2.src=im.src; });
+    const tmp = new Image(); tmp.src = im.src;
+    await new Promise(r=> tmp.onload = r);
     const c = document.createElement("canvas");
-    c.width = img2.naturalWidth || img2.width || 1600;
-    c.height = img2.naturalHeight || img2.height || 1200;
+    c.width = tmp.naturalWidth || tmp.width || 1600;
+    c.height = tmp.naturalHeight || tmp.height || 1200;
     const ctx = c.getContext("2d");
     ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,c.width,c.height);
-    ctx.drawImage(img2,0,0,c.width,c.height);
+    ctx.drawImage(tmp,0,0,c.width,c.height);
     return c.toDataURL("image/jpeg", 0.9);
   }
-
-  return ""; // no hay preview
+  return "";
 }
 
-/* Copiar imagen al portapapeles (opcional) */
+/* Copiar imagen al portapapeles (si el navegador lo permite) */
 async function copyImageToClipboard(jpegDataUrl){
   try{
     if(!jpegDataUrl) return;
@@ -3781,34 +3766,12 @@ async function copyImageToClipboard(jpegDataUrl){
       const res = await fetch(jpegDataUrl);
       const blob = await res.blob();
       await navigator.clipboard.write([new ClipboardItem({[blob.type]: blob})]);
-      setInfo("Imagen copiada. Pegala en WhatsApp.");
+      setInfo("Imagen copiada. Pegala en WhatsApp (Ctrl+V).");
     }
   }catch(e){ /* ignorar */ }
 }
 
-/* Abrir WhatsApp SIEMPRE por wa.me (sin panel Compartir) */
-async function openWhatsAppDirect(payload, phoneInput){
-  setInfo("Abriendo WhatsApp…");
-  const name = payload?.contact?.name || "";
-  const msg  = payload?.contact?.msg  || "";
-  const texto = encodeURIComponent(`Quiero cotizar este diseño.\n\nNombre/Empresa: ${name}\n${msg||""}`);
-
-  // copiar imagen antes de abrir
-  await copyImageToClipboard(payload.image);
-
-  // elegir número (forzado a tu contacto)
-const target = "5491160410607"; // <-- tu número en formato internacional, solo dígitos
-const url = `https://wa.me/${target}?text=${texto}`;
-window.open(url, "_blank");
-// … dentro del else {  // cuando es teléfono
-payload.image = await getPreviewJPEG();          // asegura JPEG
-await openWhatsAppWithImage(payload);            // abre tu chat
-sendLeadCopyEmail(payload);                      // <-- copia por mail a dario@
-setInfo("WhatsApp abierto. Envié copia por mail ✅");
-
-}
-
-/* Webhook Email con fallbacks (igual, sin cambios visuales) */
+/* Webhook Email con fallbacks */
 async function postWebhook(payload){
   const url = (window.CONTACT && CONTACT.webhook_url) || "";
   if(!url) return {ok:false};
@@ -3828,28 +3791,45 @@ async function postWebhook(payload){
     return {ok:true,via:"form-post"};
   }catch(e){}
   return {ok:false};
-  <script>
+}
+
+/* Enviar una copia por mail cuando el canal es WhatsApp */
 async function sendLeadCopyEmail(payload){
-  // etiqueta el canal para el asunto del correo
   const copy = {
     meta: { channel: "whatsapp", ts: new Date().toISOString() },
     contact: {
       name: payload?.contact?.name || "",
-      contact: payload?.contact?.contact || "", // acá va el teléfono escrito
+      contact: payload?.contact?.contact || "", // teléfono escrito por el usuario
       msg: payload?.contact?.msg || ""
     },
     design: payload?.design || {},
     image: payload?.image || ""  // JPEG ya generado
   };
-  try {
-    // no bloquea la UI; si falla, seguimos igual
-    postWebhook(copy);
-  } catch(e) {}
-}
-</script>
+  try { postWebhook(copy); } catch(e) {}
 }
 
-/* Listener del botón: valida, fuerza JPEG y decide canal */
+/* Abrir TU WhatsApp directo y preparar imagen */
+async function openWhatsAppDirect(payload){
+  setInfo("Preparando WhatsApp…");
+
+  // forzar JPEG y copiarlo si se puede
+  payload.image = await getPreviewJPEG();
+  await copyImageToClipboard(payload.image);
+
+  const name = payload?.contact?.name || "";
+  const msg  = payload?.contact?.msg  || "";
+  const texto = encodeURIComponent(`Quiero cotizar este diseño.\n\nNombre/Empresa: ${name}\n${msg||""}`);
+
+  // forzado a tu chat
+  const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${texto}`;
+  window.open(url, "_blank");
+
+  // enviar copia por mail para registrar el lead
+  sendLeadCopyEmail(payload);
+  setInfo("WhatsApp abierto. Envié copia por mail ✅");
+}
+
+/* Listener del botón: valida, decide canal y envía */
 (function wireSend(){
   const btn = $("q_send"); if(!btn) return;
   const clone = btn.cloneNode(true); btn.parentNode.replaceChild(clone, btn);
@@ -3860,27 +3840,29 @@ async function sendLeadCopyEmail(payload){
     const name    = ($("q_name")?.value || $("c_name")?.value || "").trim();
     const contact = ($("q_contact")?.value || $("c_contact")?.value || "").trim();
     const msg     = ($("q_msg")?.value || $("c_msg")?.value || "").trim();
+
     if(!name){ setInfo("Completá tu nombre / empresa."); ($("q_name")||$("c_name"))?.focus(); return; }
     if(!contact){ setInfo("Completá Email o WhatsApp."); ($("q_contact")||$("c_contact"))?.focus(); return; }
 
-    // construir payload (reutiliza tu función existente si la hay)
+    // Construir payload desde tu función si existe
     let payload = (typeof buildPayload==="function") ? await buildPayload() : {contact:{}, design:{}, image:""};
     payload.contact = Object.assign({}, payload.contact, { name, contact, msg });
 
-    // **FORZAR JPEG RASTER** para que el mail no salga en SVG
-    payload.image = await getPreviewJPEG();
-
     const isMail = reEmail.test(contact);
+
     if (isMail){
+      // EMAIL → webhook
       setInfo("Enviando…");
       const r = await postWebhook(payload);
       setInfo(r.ok ? "Enviado ✅" : "No se pudo confirmar el envío");
     } else {
-      await openWhatsAppDirect(payload, contact);
+      // WHATSAPP → tu chat + copia por mail
+      await openWhatsAppDirect(payload);
     }
   });
 })();
 </script>
+
 
 </body>
 </html>
