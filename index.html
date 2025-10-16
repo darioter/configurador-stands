@@ -3713,7 +3713,7 @@ const reEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function onlyDigits(s){ return String(s||"").replace(/\D+/g,""); }
 function isPhone(s){
   const d = onlyDigits(s);
-  return d.length >= 8 && d.length <= 15;  // ej: 54911XXXXXXXX
+  return d.length >= 8 && d.length <= 15;  // ej: 5491160410607
 }
 function setInfo(msg){
   const el = document.getElementById('q_info');
