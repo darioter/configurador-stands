@@ -3895,6 +3895,165 @@ document.getElementById("q_send")?.addEventListener("click", async () => {
   }
 });
 </script>
+<script>
+/* === VALIDACIONES === */
+const reEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function onlyDigits(s){ return String(s||"").replace(/\D+/g,""); }
+function isPhone(s){ const d = onlyDigits(s); return d.length >= 8 && d.length <= 15; } // 8–15 dígitos
+
+function setInfo(msg){
+  const el = document.getElementById('q_info');
+  if (el) el.textContent = msg;
+}
+function getVal(...ids){
+  for (const id of ids){
+    const el = document.getElementById(id);
+    if (el && el.value != null) return el.value.trim();
+  }
+  return "";
+}
+
+/* === WHATSAPP === */
+function dataURLToBlob(dataURL){
+  const [meta, b64] = dataURL.split(',');
+  const mime = (meta.split(':')[1]||'image/png').split(';')[0];
+  const bin = atob(b64); const u8 = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], {type: mime});
+}
+function fileFromDataURL(dataURL){
+  const isJpg = dataURL.startsWith('data:image/jpeg');
+  const isPng = dataURL.startsWith('data:image/png');
+  const ext = isJpg ? 'jpg' : (isPng ? 'png' : 'png');
+  const mime = isJpg ? 'image/jpeg' : 'image/png';
+  return new File([dataURLToBlob(dataURL)], `boceto_dali.${ext}`, {type: mime});
+}
+async function sendWhatsApp(payload, phone){
+  setInfo("Abriendo WhatsApp…");
+  const img  = payload.image || payload.preview || "";
+  const name = payload.contact?.name || "";
+  const msg  = payload.contact?.msg  || "";
+  const texto = encodeURIComponent(`Quiero cotizar este diseño.\n\nNombre/Empresa: ${name}\n${msg||""}`);
+
+  // Compartir imagen (si el navegador lo soporta)
+  try{
+    if(img && navigator.canShare){
+      const file = fileFromDataURL(img);
+      if(navigator.canShare({files:[file]})){
+        await navigator.share({ files:[file], text: "Quiero cotizar este diseño", title: "Boceto Dalí" });
+        setInfo("Compartido ✅");
+      }
+    }
+  }catch(e){}
+
+  // Abrir wa.me con el número
+  const num = onlyDigits(phone);
+  const url = `https://wa.me/${num}?text=${texto}`;
+  window.open(url, "_blank");
+}
+
+/* === EMAIL (webhook) con fallbacks === */
+async function postWebhook(payload){
+  const url = (window.CONTACT && CONTACT.webhook_url) || "";
+  if(!url) return {ok:false};
+  try{
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
+      credentials: "omit"
+    });
+    if (r.ok) return {ok:true, via:"json"};
+  }catch(e){}
+  try{
+    await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type":"text/plain;charset=utf-8"},
+      body: JSON.stringify(payload),
+      mode: "no-cors",
+      credentials: "omit"
+    });
+    return {ok:true, via:"text/plain-no-cors"};
+  }catch(e){}
+  try{
+    let iframe = document.getElementById('send_target_iframe');
+    if(!iframe){
+      iframe = document.createElement('iframe');
+      iframe.name = 'send_target_iframe';
+      iframe.id = 'send_target_iframe';
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+    }
+    const form = document.createElement('form');
+    form.action = url; form.method = 'POST'; form.enctype = 'text/plain'; form.target = 'send_target_iframe';
+    const raw = document.createElement('textarea'); raw.name = 'raw'; raw.value = JSON.stringify(payload);
+    form.appendChild(raw); document.body.appendChild(form); form.submit();
+    setTimeout(()=>{ try{ form.remove(); }catch{} }, 800);
+    return {ok:true, via:"form-post"};
+  }catch(e){}
+  return {ok:false};
+}
+async function sendEmail(payload){
+  setInfo("Enviando…");
+  const r = await postWebhook(payload);
+  setInfo(r.ok ? "Enviado ✅" : "No se pudo confirmar el envío");
+  return r.ok;
+}
+
+/* === BOTÓN ENVIAR: valida y decide ===
+   Usa tus mismos IDs:
+   - Nombre:  q_name  (o c_name)
+   - Contacto: q_contact (o c_contact)
+   - Mensaje: q_msg (o c_msg)
+   - Botón:   q_send
+   - Estado opcional: q_info
+*/
+(function wireSend(){
+  const btn = document.getElementById("q_send");
+  if(!btn) return;
+
+  // Evita listeners duplicados si ya había uno
+  const clone = btn.cloneNode(true);
+  btn.parentNode.replaceChild(clone, btn);
+
+  clone.addEventListener("click", async (e) => {
+    e.preventDefault();
+
+    const name = getVal("q_name","c_name");
+    const contact = getVal("q_contact","c_contact");
+    const msg = getVal("q_msg","c_msg");
+
+    if(!name){
+      setInfo("Completá tu nombre / empresa.");
+      (document.getElementById("q_name")||document.getElementById("c_name"))?.focus();
+      return;
+    }
+    if(!contact){
+      setInfo("Completá Email o WhatsApp.");
+      (document.getElementById("q_contact")||document.getElementById("c_contact"))?.focus();
+      return;
+    }
+
+    const isMail = reEmail.test(contact);
+    const isTel  = isPhone(contact);
+    if(!isMail && !isTel){
+      setInfo("Ingresá un email válido o un teléfono con código de país.");
+      (document.getElementById("q_contact")||document.getElementById("c_contact"))?.focus();
+      return;
+    }
+
+    // buildPayload() ya existe en tu proyecto
+    let payload = (typeof buildPayload === "function") ? await buildPayload() : {contact:{}, design:{}, image:""};
+    payload.contact = Object.assign({}, payload.contact, { name, contact, msg });
+
+    if (isMail){
+      await sendEmail(payload);       // EMAIL → Apps Script
+    } else {
+      await sendWhatsApp(payload, contact);  // WHATSAPP → número
+    }
+  });
+})();
+</script>
 
 </body>
 </html>
