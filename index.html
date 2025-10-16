@@ -3706,243 +3706,106 @@ ${(payload.preview || '').substring(0,120)}...`
 })();
 </script>
 
-
 <script>
-// ========= Utilidades de envío =========
-async function postWebhook(payload){
-  const url = (window.CONTACT && CONTACT.webhook_url) || "";
-  if(!url) return {ok:false, reason:"no-webhook"};
+/* ========= CONFIG ========= */
+const WHATSAPP_NUMBER = "54911XXXXXXXX";  // <-- REEMPLAZA por tu número (solo dígitos)
 
-  // 1) JSON normal (si la CSP lo permite)
-  try{
-    const r1 = await fetch(url, {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify(payload),
-      credentials: "omit"
-    });
-    if (r1.ok) { let data={}; try{ data = await r1.json(); }catch{}; return {ok:true, via:"json", data}; }
-  }catch(e){ console.warn("webhook json failed", e); }
-
-  // 2) text/plain + no-cors (evita preflight pero puede caer por connect-src)
-  try{
-    await fetch(url, {
-      method: "POST",
-      headers: {"Content-Type":"text/plain;charset=utf-8"},
-      body: JSON.stringify(payload),
-      credentials: "omit",
-      mode: "no-cors"
-    });
-    return {ok:true, via:"text/plain-no-cors"};
-  }catch(e){ console.warn("webhook text/plain failed", e); }
-
-  // 3) FORM POST (bypassa connect-src; depende de form-action)
-  try{
-    let iframe = document.getElementById('send_target_iframe');
-    if(!iframe){
-      iframe = document.createElement('iframe');
-      iframe.name = 'send_target_iframe';
-      iframe.id = 'send_target_iframe';
-      iframe.style.display = 'none';
-      document.body.appendChild(iframe);
-    }
-    const form = document.createElement('form');
-    form.action = url;
-    form.method = 'POST';
-    form.enctype = 'text/plain';
-    form.target = 'send_target_iframe';
-
-    const raw = document.createElement('textarea');
-    raw.name = 'raw';
-    raw.value = JSON.stringify(payload);
-    form.appendChild(raw);
-
-    document.body.appendChild(form);
-    form.submit();
-    setTimeout(()=>{ try{ form.remove(); }catch{} }, 1000);
-    return {ok:true, via:'form-post'};
-  }catch(e){ console.warn("form post failed", e); }
-
-  // 4) Beacon (último recurso)
-  try{
-    const blob = new Blob([JSON.stringify(payload)], {type: "text/plain"});
-    if(navigator.sendBeacon(url, blob)) return {ok:true, via:"beacon"};
-  }catch(e){ console.warn("beacon failed", e); }
-
-  return {ok:false, reason:"all-failed"};
-}
-
-async function sendViaEmailJS(payload){
-  const cfg = (window.CONTACT && CONTACT.emailjs) || {};
-  if(!cfg || !cfg.service_id || !cfg.template_id || !cfg.public_key) return {ok:false, reason:"no-emailjs"};
-  if(!window.emailjs){
-    await new Promise((resolve, reject)=>{
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js";
-      s.onload = resolve; s.onerror = reject; document.body.appendChild(s);
-    });
-  }
-  window.emailjs.init(cfg.public_key);
-  const to = (window.CONTACT && CONTACT.to_email) || "dario@dali-arquitectura.com.ar";
-  await window.emailjs.send(cfg.service_id, cfg.template_id, {
-    to_email: to,
-    from_name: document.getElementById("c_name")?.value || document.getElementById("q_name")?.value || "Cliente",
-    reply_to: document.getElementById("c_contact")?.value || document.getElementById("q_contact")?.value || "",
-    message: document.getElementById("c_msg")?.value || document.getElementById("q_msg")?.value || "",
-    lot_type: (window.state?.lotType || window.S?.lotType || ""),
-    width_m: (window.state?.widthM || window.S?.gridW || ""),
-    height_m: (window.state?.heightM || window.S?.gridH || ""),
-    tile_m: (window.state?.tileM || ""),
-    cells: `${window.state?.cols || ""}x${window.state?.rows || ""}`,
-    design_json: JSON.stringify(payload.design),
-    image_b64: payload.image || payload.preview || ""
-  });
-  return {ok:true};
-}
-
-function mailtoFallback(payload){
-  const name = document.getElementById('c_name')?.value || document.getElementById('q_name')?.value || "";
-  const contact = document.getElementById('c_contact')?.value || document.getElementById('q_contact')?.value || "";
-  const msg = document.getElementById('c_msg')?.value || document.getElementById('q_msg')?.value || "";
-  const subject = encodeURIComponent(`Solicitud de cotización · Dalí Arquitectura · ${new Date().toLocaleDateString()}`);
-  const body = encodeURIComponent(
-`Nombre/Empresa: ${name}
-Contacto: ${contact}
-
-Mensaje:
-${msg}
-
-Diseño (JSON):
-${JSON.stringify(payload.design)}
-
-Imagen (dataURL — pegar en navegador si el cliente no adjunta):
-${(payload.image || payload.preview || '').substring(0,120)}...`
-  );
-  const to = (window.CONTACT && CONTACT.to_email) || "dario@dali-arquitectura.com.ar";
-  window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
-  return {ok:true, via:"mailto"};
-}
-
-async function sendContact(payload){
-  const qInfo = document.getElementById("q_info");
-  if(qInfo) qInfo.textContent = "Enviando…";
-  try{
-    const r = await postWebhook(payload);
-    if(r && r.ok){ if(qInfo) qInfo.textContent = "Enviado ✅"; return r; }
-  }catch(e){ console.warn("webhook error", e); }
-  try{
-    const r2 = await sendViaEmailJS(payload);
-    if(r2 && r2.ok){ if(qInfo) qInfo.textContent = "Enviado con EmailJS ✅"; return r2; }
-  }catch(e){ console.warn("emailjs error", e); }
-  if(qInfo) qInfo.textContent = "Usando mailto…";
-  return mailtoFallback(payload);
-}
-</script>
-
-
-<script>
-function buildPayload(){
-  // Intentar obtener imagen del boceto
-  let img = "";
-  try{
-    if(typeof renderImage === "function"){
-      img = renderImage("jpeg", 0.88); // menor peso
-    }else{
-      const svg = document.getElementById('svg') || document.querySelector('svg');
-      if(svg){
-        const xml = new XMLSerializer().serializeToString(svg);
-        const svg64 = btoa(unescape(encodeURIComponent(xml)));
-        const image64 = "data:image/svg+xml;base64," + svg64;
-        img = image64;
-      } else {
-        img = document.getElementById("preview")?.src || "";
-      }
-    }
-  }catch(e){ console.warn("no preview image", e); }
-
-  const notes = document.getElementById("notes")?.value || "";
-  const name  = document.getElementById("c_name")?.value || document.getElementById("q_name")?.value || "";
-  const contact = document.getElementById("c_contact")?.value || document.getElementById("q_contact")?.value || "";
-  const msg   = document.getElementById("c_msg")?.value || document.getElementById("q_msg")?.value || "";
-
-  const lotType = window.state?.lotType || window.S?.lotType || (document.getElementById("lotType")?.value || "");
-  const widthM  = window.state?.widthM || window.S?.gridW || parseFloat(document.getElementById("widthM")?.value || "0");
-  const heightM = window.state?.heightM || window.S?.gridH || parseFloat(document.getElementById("heightM")?.value || "0");
-  const tileM   = window.state?.tileM || parseFloat(document.getElementById("tileM")?.value || "0.5");
-  const cols    = window.state?.cols || Math.round(widthM / tileM);
-  const rows    = window.state?.rows || Math.round(heightM / tileM);
-  const placed  = window.state?.placed || window.S?.placed || window.S?.cells || [];
-
-  return {
-    meta:{ ts:new Date().toISOString(), app:"Dali Stand Designer (public)", version:"1.0.1" },
-    contact:{ name, contact, msg, notes },
-    design:{ lotType, widthM, heightM, tileM, cols, rows, placed },
-    image: img
-  };
-}
-</script>
-
-
-<script>
-document.getElementById("q_send")?.addEventListener("click", async () => {
-  try{
-    const payload = buildPayload();
-    await sendContact(payload);
-  }catch(err){
-    console.error(err);
-    const qInfo = document.getElementById("q_info");
-    if(qInfo) qInfo.textContent = "Error en el envío.";
-  }
-});
-</script>
-<script>
-/* === utilidades básicas === */
+/* ========= UTILIDADES ========= */
 const reEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const get = id => document.getElementById(id);
+const $ = id => document.getElementById(id);
 const digits = s => String(s||"").replace(/\D+/g,"");
-function setInfo(m){ const el=get('q_info'); if(el) el.textContent=m; }
-function val(...ids){ for(const id of ids){ const el=get(id); if(el && el.value!=null) return el.value.trim(); } return ""; }
+function setInfo(m){ const el=$('q_info'); if(el) el.textContent=m; }
 
-/* === convierte dataURL -> File y Clipboard === */
-function dataURLToBlob(dataURL){
-  const [meta,b64] = dataURL.split(',');
-  const mime = (meta.split(':')[1]||'image/png').split(';')[0];
-  const bin  = atob(b64); const u8=new Uint8Array(bin.length);
-  for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
-  return new Blob([u8],{type:mime});
+/* Convertir cualquier preview (canvas/svg/img) a JPEG dataURL */
+async function getPreviewJPEG(){
+  // 1) canvas directo (si existe)
+  const cvs = document.querySelector("canvas#stage, canvas.preview, canvas");
+  if (cvs && cvs.toDataURL) {
+    // fondo blanco para evitar png transparente en JPEG
+    const c = document.createElement("canvas");
+    c.width = cvs.width; c.height = cvs.height;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,c.width,c.height);
+    ctx.drawImage(cvs,0,0);
+    return c.toDataURL("image/jpeg", 0.9);
+  }
+
+  // 2) si hay SVG, rasterizarlo a JPEG
+  const svg = document.getElementById("svg") || document.querySelector("svg");
+  if (svg) {
+    const xml = new XMLSerializer().serializeToString(svg);
+    const svg64 = btoa(unescape(encodeURIComponent(xml)));
+    const img = new Image();
+    const url = "data:image/svg+xml;base64," + svg64;
+    await new Promise(res => { img.onload = res; img.src = url; });
+    const c = document.createElement("canvas");
+    c.width = img.width || 1600;
+    c.height = img.height || 1200;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,c.width,c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.9);
+  }
+
+  // 3) fallback: <img id="preview"> → si es svg convertir; si no, usar tal cual
+  const im = $("preview");
+  if (im && im.src) {
+    if (im.src.startsWith("data:image/svg")) {
+      const img = new Image(); await new Promise(r=>{ img.onload=r; img.src=im.src; });
+      const c = document.createElement("canvas");
+      c.width = img.width || 1600; c.height = img.height || 1200;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,c.width,c.height);
+      ctx.drawImage(img,0,0,c.width,c.height);
+      return c.toDataURL("image/jpeg", 0.9);
+    }
+    // si ya es raster, re-rasterizar a JPEG
+    const img2 = new Image(); await new Promise(r=>{ img2.onload=r; img2.src=im.src; });
+    const c = document.createElement("canvas");
+    c.width = img2.naturalWidth || img2.width || 1600;
+    c.height = img2.naturalHeight || img2.height || 1200;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,c.width,c.height);
+    ctx.drawImage(img2,0,0,c.width,c.height);
+    return c.toDataURL("image/jpeg", 0.9);
+  }
+
+  return ""; // no hay preview
 }
-function fileFromDataURL(dataURL){
-  const isJpg = dataURL.startsWith('data:image/jpeg');
-  const ext   = isJpg ? 'jpg' : 'png';
-  const mime  = isJpg ? 'image/jpeg' : 'image/png';
-  return new File([dataURLToBlob(dataURL)], `boceto_dali.${ext}`, {type:mime});
-}
 
-/* === abre WhatsApp SIEMPRE por wa.me (sin usar share sheet) === */
-async function openWhatsApp(payload, phoneRaw){
-  setInfo("Abriendo WhatsApp…");
-
-  // copiar imagen al portapapeles si es posible (para pegarla en WhatsApp)
+/* Copiar imagen al portapapeles (opcional) */
+async function copyImageToClipboard(jpegDataUrl){
   try{
-    const img = payload.image || payload.preview || "";
-    if(img && navigator.clipboard && window.ClipboardItem){
-      const blob = dataURLToBlob(img);
+    if(!jpegDataUrl) return;
+    if (navigator.clipboard && window.ClipboardItem){
+      const res = await fetch(jpegDataUrl);
+      const blob = await res.blob();
       await navigator.clipboard.write([new ClipboardItem({[blob.type]: blob})]);
       setInfo("Imagen copiada. Pegala en WhatsApp.");
     }
-  }catch(e){ /* ok */ }
+  }catch(e){ /* ignorar */ }
+}
 
+/* Abrir WhatsApp SIEMPRE por wa.me (sin panel Compartir) */
+async function openWhatsAppDirect(payload, phoneInput){
+  setInfo("Abriendo WhatsApp…");
   const name = payload?.contact?.name || "";
   const msg  = payload?.contact?.msg  || "";
   const texto = encodeURIComponent(`Quiero cotizar este diseño.\n\nNombre/Empresa: ${name}\n${msg||""}`);
 
-  const d = digits(phoneRaw);
-  // si el número parece internacional (>= 11 dígitos) lo usamos; si no, abrimos WhatsApp sin número para elegir contacto
-  const url = d.length >= 11 ? `https://wa.me/${d}?text=${texto}` : `https://wa.me/?text=${texto}`;
+  // copiar imagen antes de abrir
+  await copyImageToClipboard(payload.image);
+
+  // elegir número
+  const forced = digits(WHATSAPP_NUMBER);
+  const typed  = digits(phoneInput || "");
+  const target = forced || (typed.length >= 11 ? typed : "");
+
+  const url = target ? `https://wa.me/${target}?text=${texto}` : `https://wa.me/?text=${texto}`;
   window.open(url, "_blank");
 }
 
-/* === webhook email (igual que antes) === */
+/* Webhook Email con fallbacks (igual, sin cambios visuales) */
 async function postWebhook(payload){
   const url = (window.CONTACT && CONTACT.webhook_url) || "";
   if(!url) return {ok:false};
@@ -3955,7 +3818,7 @@ async function postWebhook(payload){
     return {ok:true,via:"text/plain-no-cors"};
   }catch(e){}
   try{
-    let ifr=get('send_target_iframe'); if(!ifr){ ifr=document.createElement('iframe'); ifr.name=ifr.id='send_target_iframe'; ifr.style.display='none'; document.body.appendChild(ifr); }
+    let ifr=$('send_target_iframe'); if(!ifr){ ifr=document.createElement('iframe'); ifr.name=ifr.id='send_target_iframe'; ifr.style.display='none'; document.body.appendChild(ifr); }
     const f=document.createElement('form'); f.action=url; f.method='POST'; f.enctype='text/plain'; f.target='send_target_iframe';
     const t=document.createElement('textarea'); t.name='raw'; t.value=JSON.stringify(payload);
     f.appendChild(t); document.body.appendChild(f); f.submit(); setTimeout(()=>{try{f.remove()}catch{}},800);
@@ -3963,49 +3826,35 @@ async function postWebhook(payload){
   }catch(e){}
   return {ok:false};
 }
-async function sendEmail(payload){
-  setInfo("Enviando…");
-  const r = await postWebhook(payload);
-  setInfo(r.ok ? "Enviado ✅" : "No se pudo confirmar el envío");
-  return r.ok;
-}
 
-/* === botón Enviar: valida y decide === */
+/* Listener del botón: valida, fuerza JPEG y decide canal */
 (function wireSend(){
-  const btn = get("q_send");
-  if(!btn) return;
-
-  // evita duplicar listeners si pegaste varias veces
-  const clone = btn.cloneNode(true);
-  btn.parentNode.replaceChild(clone, btn);
+  const btn = $("q_send"); if(!btn) return;
+  const clone = btn.cloneNode(true); btn.parentNode.replaceChild(clone, btn);
 
   clone.addEventListener("click", async (e)=>{
     e.preventDefault();
 
-    const name    = val("q_name","c_name");
-    const contact = val("q_contact","c_contact");
-    const msg     = val("q_msg","c_msg");
+    const name    = ($("q_name")?.value || $("c_name")?.value || "").trim();
+    const contact = ($("q_contact")?.value || $("c_contact")?.value || "").trim();
+    const msg     = ($("q_msg")?.value || $("c_msg")?.value || "").trim();
+    if(!name){ setInfo("Completá tu nombre / empresa."); ($("q_name")||$("c_name"))?.focus(); return; }
+    if(!contact){ setInfo("Completá Email o WhatsApp."); ($("q_contact")||$("c_contact"))?.focus(); return; }
 
-    if(!name){ setInfo("Completá tu nombre / empresa."); (get("q_name")||get("c_name"))?.focus(); return; }
-    if(!contact){ setInfo("Completá Email o WhatsApp."); (get("q_contact")||get("c_contact"))?.focus(); return; }
-
-    const esMail = reEmail.test(contact);
-    const numDig = digits(contact).length;
-    const esTel  = numDig >= 8; // teléfono local o internacional
-
-    // armamos payload con tu función existente
-    let payload = (typeof buildPayload==="function") ? await buildPayload() : {contact:{},design:{},image:""};
+    // construir payload (reutiliza tu función existente si la hay)
+    let payload = (typeof buildPayload==="function") ? await buildPayload() : {contact:{}, design:{}, image:""};
     payload.contact = Object.assign({}, payload.contact, { name, contact, msg });
 
-    if(esMail){
-      // EMAIL
-      await sendEmail(payload);
-    }else if(esTel){
-      // WHATSAPP
-      await openWhatsApp(payload, contact);
-    }else{
-      setInfo("Ingresá un email válido o un teléfono con código de país.");
-      (get("q_contact")||get("c_contact"))?.focus();
+    // **FORZAR JPEG RASTER** para que el mail no salga en SVG
+    payload.image = await getPreviewJPEG();
+
+    const isMail = reEmail.test(contact);
+    if (isMail){
+      setInfo("Enviando…");
+      const r = await postWebhook(payload);
+      setInfo(r.ok ? "Enviado ✅" : "No se pudo confirmar el envío");
+    } else {
+      await openWhatsAppDirect(payload, contact);
     }
   });
 })();
