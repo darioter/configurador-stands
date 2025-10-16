@@ -1276,6 +1276,12 @@ window.CFG = CFG;
   const SNAP_TOL = 12;
   const CELL_PX_DEFAULT = 48; // 0.5 m por celda (fallback si no hay gridEl)
   let strongSnap = true; // snap perimetral activado por defecto
+// === CENEFA & HELPERS NUEVOS ===
+// Ancho estándar de la cenefa: 5 cm
+const CENEFA_THICKNESS_M = 0.05;  // en metros
+
+// Helper metros → píxeles (usa tu escala actual de grilla)
+const m2px = (m) => m * (cellPx / CELL_M);
 
   const $ = (sel, root=document) => root.querySelector(sel);
   const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
