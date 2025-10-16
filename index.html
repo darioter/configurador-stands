@@ -3724,7 +3724,7 @@ async function getPreviewJPEG(){
     const ctx = c.getContext("2d");
     ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
     ctx.drawImage(cvs,0,0);
-    return c.toDataURL("image/jpeg", 0.9);
+    return c.toDataURL("image/jpeg", 0.7);
   }
   // 2) svg
   const svg = document.getElementById("svg") || document.querySelector("svg");
