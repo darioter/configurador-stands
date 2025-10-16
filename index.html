@@ -3796,13 +3796,10 @@ async function openWhatsAppDirect(payload, phoneInput){
   // copiar imagen antes de abrir
   await copyImageToClipboard(payload.image);
 
-  // elegir número
-  const forced = digits(WHATSAPP_NUMBER);
-  const typed  = digits(phoneInput || "");
-  const target = forced || (typed.length >= 11 ? typed : "");
-
-  const url = target ? `https://wa.me/${target}?text=${texto}` : `https://wa.me/?text=${texto}`;
-  window.open(url, "_blank");
+  // elegir número (forzado a tu contacto)
+const target = "5491160410607"; // <-- tu número en formato internacional, solo dígitos
+const url = `https://wa.me/${target}?text=${texto}`;
+window.open(url, "_blank");
 }
 
 /* Webhook Email con fallbacks (igual, sin cambios visuales) */
